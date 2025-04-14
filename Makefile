@@ -16,6 +16,11 @@ ECR_REPOSITORY_NAME ?= $(APP_NAME)
 DOCKER_IMAGE := $(ECR_REPOSITORY_NAME):$(APP_VERSION)
 DOCKER_ECR_IMAGE := $(ECR_REGISTRY)/$(DOCKER_IMAGE)
 
+# Helm設定
+HELM_RELEASE_NAME ?= api
+HELM_CHART_PATH := ./container-nodejs-api-chart
+HELM_VALUES_FILE := $(HELM_CHART_PATH)/values.yaml
+
 # 環境変数設定
 export NODE_ENV ?= production
 export PORT ?= $(APP_PORT)
@@ -30,6 +35,7 @@ export SECRET_KEY ?= "本番環境用シークレット"
 	docker-build docker-push \
 	ecr-login check-aws-credentials \
 	docker-local-build docker-local-run docker-local-stop \
+	helm-template helm-install helm-upgrade helm-uninstall \
 	setup deploy status logs port-forward all
 
 .DEFAULT_GOAL := help
@@ -61,13 +67,18 @@ help:
 	@echo "  make ecr-login    - ECRにログイン"
 	@echo "  make check-aws-credentials - AWS認証情報を確認"
 	@echo ""
+	@echo "⎈ Helm操作:"
+	@echo "  make helm-template - Helmテンプレートを検証"
+	@echo "  make helm-install  - Helmチャートをインストール"
+	@echo "  make helm-upgrade  - Helmリリースをアップグレード"
+	@echo "  make helm-uninstall - Helmリリースをアンインストール"
+	@echo ""
 	@echo "🚀 Kubernetes操作:"
-	@echo "  make setup      - kindクラスタのセットアップ"
-	@echo "  make deploy     - Kubernetesリソースのデプロイ"
-	@echo "  make status     - クラスタとリソースの状態確認"
-	@echo "  make logs       - アプリケーションのログ表示"
+	@echo "  make setup        - kindクラスタのセットアップ"
+	@echo "  make status       - クラスタとリソースの状態確認"
+	@echo "  make logs         - アプリケーションのログ表示"
 	@echo "  make port-forward - ポートフォワード開始"
-	@echo "  make all        - 完全なセットアップから動作確認まで実行"
+	@echo "  make all          - 完全なセットアップから動作確認まで実行"
 
 # ------------------------
 # 開発環境セットアップ
@@ -156,6 +167,32 @@ docker-local-stop:
 	@echo "✅ コンテナを停止しました"
 
 # ------------------------
+# Helm操作
+# ------------------------
+helm-template:
+	@echo "📋 Helmテンプレートを検証します..."
+	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_PATH) --values $(HELM_VALUES_FILE)
+
+helm-install:
+	@echo "📦 Helmチャートをインストールします..."
+	helm install $(HELM_RELEASE_NAME) $(HELM_CHART_PATH) --values $(HELM_VALUES_FILE)
+	@echo "⏳ Podの起動を待機中..."
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=container-nodejs-api --timeout=60s
+	@echo "✅ インストール完了"
+
+helm-upgrade:
+	@echo "🔄 Helmリリースをアップグレードします..."
+	helm upgrade $(HELM_RELEASE_NAME) $(HELM_CHART_PATH) --values $(HELM_VALUES_FILE)
+	@echo "⏳ Podの起動を待機中..."
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=container-nodejs-api --timeout=60s
+	@echo "✅ アップグレード完了"
+
+helm-uninstall:
+	@echo "🗑️  Helmリリースをアンインストールします..."
+	helm uninstall $(HELM_RELEASE_NAME)
+	@echo "✅ アンインストール完了"
+
+# ------------------------
 # Kubernetes操作
 # ------------------------
 setup:
@@ -165,12 +202,6 @@ setup:
 	kind create cluster --config kind-cluster.yaml
 	@echo "✅ kindクラスタのセットアップが完了しました"
 
-deploy:
-	@echo "📦 Kubernetesリソースをデプロイします..."
-	kubectl apply -f k8s/deployment.yaml
-	kubectl apply -f k8s/service.yaml
-	@echo "✅ デプロイが完了しました"
-
 status:
 	@echo "📊 クラスタの状態を確認します..."
 	@echo "\n>>> Podの状態:"
@@ -179,19 +210,19 @@ status:
 	kubectl get services
 	@echo "\n>>> Deploymentの状態:"
 	kubectl get deployments
+	@echo "\n>>> Helmリリースの状態:"
+	helm list
 
 logs:
 	@echo "📝 アプリケーションのログを表示します..."
-	kubectl logs -f deployment/container-nodejs-api
+	kubectl logs -f -l app.kubernetes.io/name=container-nodejs-api
 
 port-forward:
 	@echo "🔌 ポートフォワードを開始します (localhost:$(APP_PORT))..."
-	kubectl port-forward service/container-nodejs-api $(APP_PORT):$(APP_PORT)
+	kubectl port-forward service/$(HELM_RELEASE_NAME)-container-nodejs-api $(APP_PORT):$(APP_PORT)
 
-all: setup deploy
-	@echo "⏳ Podの起動を待機中..."
-	kubectl wait --for=condition=ready pod -l app=container-nodejs-api --timeout=60s
+all: setup helm-install
 	@echo "✨ セットアップが完了しました。以下のコマンドで動作確認できます："
-	@echo "  make status    - 状態確認"
-	@echo "  make logs      - ログ確認"
+	@echo "  make status       - 状態確認"
+	@echo "  make logs         - ログ確認"
 	@echo "  make port-forward - ポートフォワード開始"
